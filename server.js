@@ -1,37 +1,52 @@
 import express from "express";
 import WebSocket, { WebSocketServer } from "ws";
-
 import dotenv from "dotenv";
+import fetch from "node-fetch";
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
 
-const server = app.listen(process.env.PORT, () =>
-  console.log("Node TTS Stream running"),
-);
+const PORT = process.env.PORT || 3000;
+
+const server = app.listen(PORT, () => {
+  console.log("Node TTS Stream running on port", PORT);
+});
 
 const wss = new WebSocketServer({ server });
 
-const sessions = new Map(); // callSid → twilio WS
-const speakers = new Map(); // callSid → eleven WS
+const sessions = new Map(); // callSid → Twilio WS
+const speakers = new Map(); // callSid → Eleven WS
 
 /* ---------------- TWILIO MEDIA STREAM ---------------- */
 
 wss.on("connection", (twilioWs) => {
   let callSid = null;
 
-  twilioWs.on("message", (msg) => {
+  twilioWs.on("message", async (msg) => {
     const data = JSON.parse(msg);
 
+    /* ---- CALL STARTED ---- */
     if (data.event === "start") {
       callSid = data.start.callSid;
       sessions.set(callSid, twilioWs);
+
       console.log("📞 Call connected:", callSid);
+
+      // 🔥 TRIGGER FIRST QUESTION FROM PHP (DB)
+      try {
+        await fetch("https://thekreativeweb.com/codes/ivr-ai/start.php", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `CallSid=${callSid}`,
+        });
+      } catch (e) {
+        console.error("Failed to trigger first question", e);
+      }
     }
 
-    // 🔥 USER STARTED TALKING → STOP BOT
+    /* ---- USER INTERRUPT ---- */
     if (data.event === "media" && data.media.track === "inbound") {
       const eleven = speakers.get(callSid);
       if (eleven) {
@@ -41,6 +56,7 @@ wss.on("connection", (twilioWs) => {
       }
     }
 
+    /* ---- CALL ENDED ---- */
     if (data.event === "stop") {
       sessions.delete(callSid);
       speakers.delete(callSid);
@@ -58,20 +74,22 @@ wss.on("connection", (twilioWs) => {
 
 /* ---------------- PHP → NODE SPEAK ---------------- */
 
-app.post("/speak", async (req, res) => {
+app.post("/speak", (req, res) => {
   const { callSid, text } = req.body;
   const twilioWs = sessions.get(callSid);
 
   if (!twilioWs) return res.sendStatus(404);
 
-  // Kill any previous speech
+  // Stop previous speech if any
   const old = speakers.get(callSid);
   if (old) old.close();
 
   const elevenWs = new WebSocket(
     `wss://api.elevenlabs.io/v1/text-to-speech/${process.env.ELEVEN_VOICE_ID}/stream-input?model_id=eleven_multilingual_v2`,
     {
-      headers: { "xi-api-key": process.env.ELEVEN_API_KEY },
+      headers: {
+        "xi-api-key": process.env.ELEVEN_API_KEY,
+      },
     },
   );
 
@@ -107,4 +125,3 @@ app.post("/speak", async (req, res) => {
     res.sendStatus(200);
   });
 });
-
