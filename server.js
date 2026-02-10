@@ -35,16 +35,25 @@ wss.on("connection", (twilioWs) => {
       console.log("📞 Call connected:", callSid);
 
       // 🔥 TRIGGER FIRST QUESTION FROM PHP (DB)
-      try {
-        await fetch("https://thekreativeweb.com/codes/ivr-ai/start.php", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: `CallSid=${callSid}`,
-        });
-      } catch (e) {
-        console.error("Failed to trigger first question", e);
-      }
+   try {
+  const res = await fetch(
+    "https://thekreativeweb.com/codes/ivr-ai/start.php",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Render-Node-Service",
+      },
+      body: `CallSid=${callSid}`,
+      timeout: 8000, // 🔥 VERY IMPORTANT
     }
+  );
+
+  // 🔥 Force response to finish
+  await res.text();
+} catch (e) {
+  console.error("Failed to trigger first question", e);
+}
 
     /* ---- USER INTERRUPT ---- */
     if (data.event === "media" && data.media.track === "inbound") {
@@ -125,3 +134,4 @@ app.post("/speak", (req, res) => {
     res.sendStatus(200);
   });
 });
+
