@@ -1,17 +1,13 @@
 import express from "express";
 import WebSocket, { WebSocketServer } from "ws";
 import dotenv from "dotenv";
-import fetch from "node-fetch";
 
 dotenv.config();
-
-/* ---------------- BASIC SERVER ---------------- */
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-
 const server = app.listen(PORT, () => {
   console.log("Node TTS Stream running on port", PORT);
 });
@@ -28,7 +24,7 @@ const speakers = new Map(); // callSid → ElevenLabs WS
 wss.on("connection", (twilioWs) => {
   let callSid = null;
 
-  twilioWs.on("message", async (msg) => {
+  twilioWs.on("message", (msg) => {
     let data;
     try {
       data = JSON.parse(msg);
@@ -36,33 +32,10 @@ wss.on("connection", (twilioWs) => {
       return;
     }
 
-    /* ---------- CALL START ---------- */
     if (data.event === "start") {
       callSid = data.start.callSid;
       sessions.set(callSid, twilioWs);
-
       console.log("📞 Call connected:", callSid);
-
-      /* 🔥 Trigger first question from PHP */
-      try {
-        const res = await fetch(
-          "https://thekreativeweb.com/codes/ivr-ai/start.php",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-              "User-Agent": "Render-Node-Service",
-            },
-            body: `CallSid=${callSid}`,
-            timeout: 8000, // IMPORTANT
-          }
-        );
-
-        // Force socket close
-        await res.text();
-      } catch (err) {
-        console.error("❌ Failed to trigger first question", err);
-      }
     }
 
     /* ---------- USER INTERRUPT (BARGE-IN) ---------- */
@@ -75,7 +48,6 @@ wss.on("connection", (twilioWs) => {
       }
     }
 
-    /* ---------- CALL END ---------- */
     if (data.event === "stop") {
       sessions.delete(callSid);
       speakers.delete(callSid);
@@ -95,15 +67,10 @@ wss.on("connection", (twilioWs) => {
 
 app.post("/speak", (req, res) => {
   const { callSid, text } = req.body;
-
-  if (!callSid || !text) {
-    return res.sendStatus(400);
-  }
+  if (!callSid || !text) return res.sendStatus(400);
 
   const twilioWs = sessions.get(callSid);
-  if (!twilioWs) {
-    return res.sendStatus(404);
-  }
+  if (!twilioWs) return res.sendStatus(404);
 
   /* Stop previous speech */
   const oldSpeaker = speakers.get(callSid);
@@ -112,58 +79,41 @@ app.post("/speak", (req, res) => {
     speakers.delete(callSid);
   }
 
-  /* Connect to ElevenLabs Streaming */
   const elevenWs = new WebSocket(
     `wss://api.elevenlabs.io/v1/text-to-speech/${process.env.ELEVEN_VOICE_ID}/stream-input?model_id=eleven_multilingual_v2`,
     {
-      headers: {
-        "xi-api-key": process.env.ELEVEN_API_KEY,
-      },
+      headers: { "xi-api-key": process.env.ELEVEN_API_KEY },
     }
   );
 
   speakers.set(callSid, elevenWs);
 
   elevenWs.on("open", () => {
-    elevenWs.send(
-      JSON.stringify({
-        text,
-        voice_settings: {
-          stability: 0.4,
-          similarity_boost: 0.8,
-        },
-      })
-    );
+    elevenWs.send(JSON.stringify({
+      text,
+      voice_settings: {
+        stability: 0.4,
+        similarity_boost: 0.8,
+      },
+    }));
 
-    // End input
     elevenWs.send(JSON.stringify({ text: "" }));
   });
 
   elevenWs.on("message", (msg) => {
-    let data;
     try {
-      data = JSON.parse(msg);
-    } catch {
-      return;
-    }
-
-    if (data.audio) {
-      twilioWs.send(
-        JSON.stringify({
+      const data = JSON.parse(msg);
+      if (data.audio) {
+        twilioWs.send(JSON.stringify({
           event: "media",
           media: { payload: data.audio },
-        })
-      );
-    }
+        }));
+      }
+    } catch {}
   });
 
-  elevenWs.on("close", () => {
-    speakers.delete(callSid);
-  });
-
-  elevenWs.on("error", () => {
-    speakers.delete(callSid);
-  });
+  elevenWs.on("close", () => speakers.delete(callSid));
+  elevenWs.on("error", () => speakers.delete(callSid));
 
   res.sendStatus(200);
 });
