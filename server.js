@@ -1,5 +1,6 @@
 import express from "express";
-import WebSocket from "ws";
+import WebSocket, { WebSocketServer } from "ws";
+
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -11,7 +12,7 @@ const server = app.listen(process.env.PORT, () =>
   console.log("Node TTS Stream running"),
 );
 
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocketServer({ server });
 
 const sessions = new Map(); // callSid → twilio WS
 const speakers = new Map(); // callSid → eleven WS
@@ -106,3 +107,4 @@ app.post("/speak", async (req, res) => {
     res.sendStatus(200);
   });
 });
+
